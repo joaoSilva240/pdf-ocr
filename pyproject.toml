@@ -12,3 +12,9 @@ dependencies = [
 
 [project.scripts]
 pdf-ocr = "main:main"
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = []

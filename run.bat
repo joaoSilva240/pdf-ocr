@@ -1,17 +1,17 @@
 @echo off
 cd /d "%~dp0"
 
-REM Carregar config do setup se existir
-if exist ".deps\config.txt" (
-    for /f "tokens=1,* delims==" %%a in (.deps\config.txt) do set %%a=%%b
+REM ============================================================================
+REM  run.bat — Executa o OCR usando uv
+REM ============================================================================
+
+REM Carregar .env se existir (suportado pelo uv)
+if exist ".env" (
+    echo Carregando configuracoes de .env
 )
 
-set POPPLER_PATH_ARG=
-if not "%POPPLER_PATH%"=="" set POPPLER_PATH_ARG=--poppler-path "%POPPLER_PATH%"
+REM Executa com uv (auto-detecta .venv, instala deps se necessario)
+uv run main.py %*
 
-set TESSERACT_CMD_ARG=
-if not "%TESSERACT_CMD%"=="" set TESSERACT_CMD_ARG=--tesseract-cmd "%TESSERACT_CMD%"
-
-.venv\Scripts\python.exe main.py %POPPLER_PATH_ARG% %TESSERACT_CMD_ARG% %*
-
+echo.
 pause

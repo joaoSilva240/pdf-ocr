@@ -2,50 +2,50 @@
 REM ============================================================================
 REM  setup.bat — Configura o ambiente PDF-OCR no Windows
 REM
+REM  Usa uv (gerenciador de pacotes Python) em vez de pip/venv.
 REM  Baixa e extrai:
 REM    1. Poppler     (pdftoppm)  → .deps\poppler
 REM    2. Tesseract   (tesseract) → .deps\tesseract
-REM
-REM  E instala os pacotes Python via pip.
 REM ============================================================================
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 echo.
-echo ====== PDF-OCR: Configuracao automatica ======
+echo ====== PDF-OCR: Configuracao automatica (uv) ======
 echo.
 
 REM ----------------------------------------------------------------------
-REM  0. Ativar virtualenv (criar se nao existir)
+REM  0. Verificar uv
 REM ----------------------------------------------------------------------
-if not exist ".venv\Scripts\python.exe" (
-    echo [1/5] Criando ambiente virtual...
-    python -m venv .venv
+where uv >nul 2>nul
+if errorlevel 1 (
+    echo [1/5] uv nao encontrado. Instalando via pip...
+    pip install uv
     if errorlevel 1 (
-        echo ERRO: Nao foi possivel criar o virtualenv. Instale Python 3.13+.
+        echo ERRO: Nao foi possivel instalar uv. Instale manualmente:
+        echo   pip install uv
         exit /b 1
     )
 ) else (
-    echo [1/5] Ambiente virtual ja existe.
+    echo [1/5] uv encontrado.
 )
 
-set VENV_PYTHON=%~dp0.venv\Scripts\python.exe
-set VENV_PIP=%~dp0.venv\Scripts\pip.exe
-
 REM ----------------------------------------------------------------------
-REM  1. Instalar pacotes Python
+REM  1. Instalar pacotes Python com uv
 REM ----------------------------------------------------------------------
-echo [2/5] Instalando pacotes Python (pdf2image, pytesseract, Pillow)...
-"%VENV_PIP%" install pdf2image pytesseract Pillow
+echo [2/5] Instalando dependencias Python com uv...
+uv sync
 if errorlevel 1 (
-    echo ERRO: Falha ao instalar pacotes Python.
+    echo ERRO: Falha ao sincronizar dependencias.
     exit /b 1
 )
+echo     Dependencias instaladas.
+
+set DEPS_DIR=%~dp0.deps
 
 REM ----------------------------------------------------------------------
 REM  2. Baixar Poppler
 REM ----------------------------------------------------------------------
-set DEPS_DIR=%~dp0.deps
 set POPPLER_DIR=%DEPS_DIR%\poppler
 set POPPLER_ZIP=%DEPS_DIR%\poppler.zip
 
@@ -53,16 +53,11 @@ if exist "%POPPLER_DIR%\Library\bin\pdftoppm.exe" (
     echo [3/5] Poppler ja baixado em .deps\poppler.
 ) else (
     echo [3/5] Baixando Poppler (26.02.0)...
+
     if not exist "%DEPS_DIR%" mkdir "%DEPS_DIR%"
 
-    echo     Download de ~16 MB...
-    powershell -Command "& {
-        $url = 'https://github.com/oschwartz10612/poppler-windows/releases/download/v26.02.0-0/Release-26.02.0-0.zip'
-        $out = '%POPPLER_ZIP%'
-        Write-Host '       Baixando...'
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
-    }"
+    REM Download via PowerShell com TLS 1.2
+    powershell -NoProfile -Command "& { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/oschwartz10612/poppler-windows/releases/download/v26.02.0-0/Release-26.02.0-0.zip' -OutFile '%POPPLER_ZIP%' -UseBasicParsing }"
 
     if not exist "%POPPLER_ZIP%" (
         echo ERRO: Falha no download do Poppler.
@@ -72,17 +67,13 @@ if exist "%POPPLER_DIR%\Library\bin\pdftoppm.exe" (
     )
 
     echo     Extraindo...
-    powershell -Command "& {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [System.IO.Compression.ZipFile]::ExtractToDirectory('%POPPLER_ZIP%', '%DEPS_DIR%\poppler_temp')
-    }"
+    powershell -NoProfile -Command "& { Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory('%POPPLER_ZIP%', '%DEPS_DIR%\poppler_temp') }"
 
     if not exist "%DEPS_DIR%\poppler_temp" (
         echo ERRO: Falha ao extrair Poppler.
         exit /b 1
     )
 
-    REM Mover de dentro da pasta com versao para .deps\poppler
     for /d %%d in ("%DEPS_DIR%\poppler_temp\*") do (
         move "%%d" "%POPPLER_DIR%" >nul
     )
@@ -98,84 +89,47 @@ if exist "%POPPLER_DIR%\Library\bin\pdftoppm.exe" (
 )
 
 REM ----------------------------------------------------------------------
-REM  3. Baixar Tesseract
+REM  3. Verificar Tesseract
 REM ----------------------------------------------------------------------
-set TESSERACT_DIR=%DEPS_DIR%\tesseract
-set TESSERACT_EXE=%TESSERACT_DIR%\tesseract.exe
-set TESSERACT_INSTALLER=%DEPS_DIR%\tesseract-installer.exe
-
-if exist "%TESSERACT_EXE%" (
-    echo [4/5] Tesseract ja baixado em .deps\tesseract.
+set TESSERACT_DEFAULT=%ProgramFiles%\Tesseract-OCR\tesseract.exe
+if exist "%TESSERACT_DEFAULT%" (
+    echo [4/5] Tesseract encontrado em Program Files.
 ) else (
-    echo [4/5] Baixando Tesseract OCR (5.5.0)...
-
-    if not exist "%DEPS_DIR%" mkdir "%DEPS_DIR%"
-
-    REM Tesseract installer with Portuguese support
-    powershell -Command "& {
-        $url = 'https://github.com/UB-Mannheim/tesseract/releases/download/v5.5.0.20241111/tesseract-ocr-w64-setup-5.5.0.20241111.exe'
-        $out = '%TESSERACT_INSTALLER%'
-        Write-Host '       Baixando ~65 MB (pode levar alguns minutos)...'
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
-    }"
-
-    if not exist "%TESSERACT_INSTALLER%" (
-        echo ERRO: Falha no download do Tesseract.
-        echo       Baixe manualmente de:
-        echo       https://github.com/UB-Mannheim/tesseract/releases
-        exit /b 1
-    )
-
-    echo     Extraindo via instalador silencioso...
-    REM Tentar extrair sem GUI: /S ou /verysilent
-    REM Se falhar, orientar o usuario
-    "%TESSERACT_INSTALLER%" /verysilent /dir="%TESSERACT_DIR%" /components="core,langs_por"
-
-    if exist "%TESSERACT_EXE%" (
-        echo     Tesseract instalado em .deps\tesseract
-        del "%TESSERACT_INSTALLER%" 2>nul
-    ) else (
-        echo.
-        echo Instalacao silenciosa pode ter falhado. Tentando modo alternativo...
-        REM Modo alternativo: extrair o 7z embutido
-        "%TESSERACT_INSTALLER%" /S /D="%TESSERACT_DIR%"
-        if exist "%TESSERACT_EXE%" (
-            echo     Tesseract instalado em .deps\tesseract
-        )
-    )
-
-    if not exist "%TESSERACT_EXE%" (
-        echo.
-        echo AVISO: Nao foi possivel instalar Tesseract automaticamente.
-        echo        Baixe manualmente de:
-        echo        https://github.com/UB-Mannheim/tesseract/releases
-        echo.
-        echo        Instale EM: %TESSERACT_DIR%
-        echo        E marque a opcao de suporte a Portuguese (Brasil).
-    )
+    echo [4/5] Tesseract nao encontrado em Program Files.
+    echo        Baixe e instale manualmente de:
+    echo        https://github.com/UB-Mannheim/tesseract/wiki
+    echo.
+    echo        Instale com suporte a Portuguese (Brasil).
+    echo.
+    echo        Ou extraia em .deps\tesseract\ e configure manualmente.
 )
 
 REM ----------------------------------------------------------------------
-REM  4. Criar atalhos / config
+REM  4. Gerar .env com os caminhos detectados
 REM ----------------------------------------------------------------------
-echo [5/5] Gerando arquivo de configuracao...
+echo [5/5] Gerando arquivo .env...
 
-REM Salvar caminhos para o script Python usar
-set CONFIG_FILE=%~dp0.deps\config.txt
-echo POPPLER_PATH=%POPPLER_DIR%\Library\bin > "%CONFIG_FILE%"
-echo TESSERACT_CMD=%TESSERACT_EXE% >> "%CONFIG_FILE%"
+set POPPLER_PATH=
+if exist "%POPPLER_DIR%\Library\bin\pdftoppm.exe" (
+    set "POPPLER_PATH=%POPPLER_DIR%\Library\bin"
+)
+set TESSERACT_CMD=
+if exist "%TESSERACT_DEFAULT%" (
+    set "TESSERACT_CMD=%TESSERACT_DEFAULT%"
+)
+
+(
+    echo POPPLER_PATH=%POPPLER_PATH%
+    echo TESSERACT_CMD=%TESSERACT_CMD%
+) > ".env"
 
 echo.
 echo ====== Configuracao concluida! ======
 echo.
-echo Para processar um PDF:
-echo   %VENV_PYTHON% main.py
+echo Para executar:
+echo   uv run main.py
 echo.
-echo Ou com caminhos explicitos:
-echo   %VENV_PYTHON% main.py --poppler-path "%POPPLER_DIR%\Library\bin" --tesseract-cmd "%TESSERACT_EXE%"
-echo.
-echo Ou via run.bat (ja configurado):
+echo Ou pelo atalho:
 echo   run
 echo.
 pause

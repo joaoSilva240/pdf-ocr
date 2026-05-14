@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import re
 import sys
 from pathlib import Path
@@ -898,6 +899,15 @@ def main() -> None:
     args = parser.parse_args()
 
     # ── Auto-detecção de dependências comuns ──
+    # Prioridade: 1) CLI args  2) variáveis de ambiente  3) caminhos fixos
+    if not args.poppler_path:
+        env_poppler = os.environ.get("POPPLER_PATH")
+        if env_poppler:
+            p = Path(env_poppler)
+            if p.is_dir() and (p / "pdftoppm.exe").is_file():
+                args.poppler_path = str(p.resolve())
+                log.info("Poppler via POPPLER_PATH: %s", args.poppler_path)
+
     if not args.poppler_path:
         candidates_poppler = [
             PROJECT_ROOT / ".deps" / "poppler" / "Library" / "bin",
@@ -909,6 +919,14 @@ def main() -> None:
                 args.poppler_path = str(p.resolve())
                 log.info("Poppler auto-detectado em: %s", args.poppler_path)
                 break
+
+    if not args.tesseract_cmd:
+        env_tesseract = os.environ.get("TESSERACT_CMD")
+        if env_tesseract:
+            c = Path(env_tesseract)
+            if c.is_file():
+                args.tesseract_cmd = str(c.resolve())
+                log.info("Tesseract via TESSERACT_CMD: %s", args.tesseract_cmd)
 
     if not args.tesseract_cmd:
         candidates_tesseract = [
