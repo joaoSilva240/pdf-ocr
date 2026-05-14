@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+
+# Dependencies baixadas (Poppler, Tesseract installer)
+.deps/
+*.exe
+*.zip
+
+# Dados gerados (imagens PNG, resultados TXT)
+data/
+ocr_*.txt
+
+# Configuração local
+.python-version
+
+# VS Code
+.vscode/
+
+# JetBrains IDEs
+.idea/
+*.iml
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# PDFs (arquivos grandes, não versionar)
+*.pdf
+
+# Ambiente
+.env
+.env.local
