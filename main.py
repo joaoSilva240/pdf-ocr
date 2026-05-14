@@ -64,6 +64,65 @@ DEPENDENCY_HELP = """
 """
 
 
+# ---------------------------------------------------------------------------
+# Pré-processamento de imagem (Opção A)
+# ---------------------------------------------------------------------------
+def preprocess_image(
+    image: Image.Image,
+    binarize: bool = True,
+    denoise: bool = True,
+    contrast_boost: float = 1.8,
+) -> Image.Image:
+    """Melhora a imagem antes do OCR para aumentar a taxa de acerto.
+
+    Etapas:
+      1. Escala de cinza (remove interferência de cor)
+      2. Auto‑contraste (equaliza histograma para separar texto do fundo)
+      3. Sharpen (realça bordas das letras)
+      4. Binarização adaptativa (preto e branco)
+      5. Remoção de ruído (filtro mediano)
+
+    Args:
+        image: Imagem PIL original.
+        binarize: Se True, converte para preto e branco.
+        denoise: Se True, aplica filtro mediano.
+        contrast_boost: Fator de aumento de contraste (1.0 = original).
+
+    Returns:
+        Imagem processada.
+    """
+    from PIL import ImageEnhance, ImageFilter, ImageOps
+
+    # 1. Escala de cinza
+    img = image.convert("L")
+
+    # 2. Auto‑contraste: corta 2% de cada extremidade para evitar ruído
+    img = ImageOps.autocontrast(img, cutoff=2)
+
+    # 3. Aumento de contraste
+    if contrast_boost != 1.0:
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(contrast_boost)
+
+    # 4. Sharpen suave para realçar bordas das letras
+    img = img.filter(ImageFilter.UnsharpMask(radius=1, percent=80, threshold=2))
+
+    # 5. Binarização adaptativa
+    if binarize:
+        # Usa o percentil 85 como threshold (mais tolerante que média simples)
+        extrema = img.getextrema()
+        if extrema[0] < extrema[1]:
+            # Calcula um threshold que preserva traços finos
+            threshold = int(extrema[0] + (extrema[1] - extrema[0]) * 0.70)
+            img = img.point(lambda x: 255 if x > threshold else 0)
+
+    # 6. Remoção de ruído (aplicada por último, depois da binarização)
+    if denoise:
+        img = img.filter(ImageFilter.MedianFilter(size=3))
+
+    return img
+
+
 def check_dependencies() -> tuple[bool, bool]:
     """Verifica se pdftoppm (poppler) e tesseract estão acessíveis.
 
@@ -302,13 +361,20 @@ def convert_pages_to_images(
 def ocr_image_with_layout(
     image_path: Path,
     lang: str = "por",
-    psm: int = 6,
+    psm: int = 3,
     tessdata_dir: str | None = None,
     tesseract_cmd: str | None = None,
+    preprocess: bool = True,
+    binarize: bool = True,
+    denoise: bool = True,
+    auto_columns: bool = True,
 ) -> str:
     """Aplica OCR em uma imagem e retorna o texto com layout preservado.
 
-    A estratégia de layout usa `image_to_data()` para obter coordenadas
+    Antes do OCR, aplica pré-processamento opcional (escala de cinza,
+    contraste, binarização, remoção de ruído) para melhorar a acurácia.
+
+    A estratégia de layout usa ``image_to_data()`` para obter coordenadas
     de cada palavra e reconstruir o texto com indentação, parágrafos e
     colunas aproximados.
 
@@ -316,17 +382,20 @@ def ocr_image_with_layout(
         image_path: Caminho da imagem PNG.
         lang: Código do idioma (padrão 'por' = português).
         psm: Modo de segmentação do Tesseract.
-              6 = bloco uniforme (ideal para textos limpos)
-              3 = automático sem OSD
-              1 = automático com OSD
+              3 = automático sem OSD (recomendado para layouts variados)
+              6 = bloco uniforme (texto simples, uma coluna)
               4 = coluna única
+              1 = automático com OSD
         tessdata_dir: Caminho para tessdata (se não estiver no PATH).
         tesseract_cmd: Caminho do executável tesseract.
+        preprocess: Se True, aplica pré-processamento na imagem.
+        binarize: Se True (e preprocess=True), converte para P&B.
+        denoise: Se True (e preprocess=True), remove ruído.
+        auto_columns: Se True, tenta detectar colunas automaticamente.
 
     Returns:
         Texto extraído com layout preservado.
     """
-    from PIL import Image
     import pytesseract
     from pytesseract import Output
 
@@ -339,7 +408,17 @@ def ocr_image_with_layout(
     if tessdata_dir:
         config += f" --tessdata-dir {tessdata_dir}"
 
+    from PIL import Image
     img = Image.open(str(image_path))
+
+    # ── Pré-processamento (Opção A) ──
+    if preprocess:
+        img = preprocess_image(
+            img,
+            binarize=binarize,
+            denoise=denoise,
+            contrast_boost=1.5,
+        )
 
     # ── Abordagem 1: image_to_data (melhor para layout) ──
     try:
@@ -349,28 +428,35 @@ def ocr_image_with_layout(
         data = None
 
     if data and data.get("text"):
-        return _reconstruct_layout(data)
+        return _reconstruct_layout(data, auto_columns=auto_columns)
 
     # ── Abordagem 2 (fallback): image_to_string ──
     log.info("  Usando fallback image_to_string para %s", image_path.name)
     text = pytesseract.image_to_string(img, lang=lang, config=config)
-    # Remove caracteres de controle estranhos mas mantém \n
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
     return text
 
 
-def _reconstruct_layout(data: dict) -> str:
-    """Versão aprimorada da reconstrução de layout.
+def _reconstruct_layout(data: dict, auto_columns: bool = True) -> str:
+    """Reconstroi o texto preservando layout e detectando colunas.
 
-    Usa o bloco e parágrafo do Tesseract para agrupar e preservar
-    estrutura de parágrafos, listas e colunas.
+    Cada bloco detectado pelo Tesseract é classificado em uma coluna
+    de acordo com sua posição horizontal. Depois as colunas são
+    processadas da esquerda para a direita, cada uma de cima para baixo.
+
+    Args:
+        data: Dicionário retornado por ``image_to_data(…, Output.DICT)``.
+        auto_columns: Se True, tenta detectar e agrupar colunas.
+
+    Returns:
+        Texto reconstruído com parágrafos e colunas preservados.
     """
     from collections import defaultdict
 
     n = len(data["level"])
 
-    # Estrutura: block -> para -> line -> [(left, word)]
-    blocks: dict[int, dict[int, dict[int, list[tuple[int, str]]]]] = (
+    # ── 1. Agrupar palavras: block -> para -> line -> [(left, word)] ──
+    blocks_raw: dict[int, dict[int, dict[int, list[tuple[int, str]]]]] = (
         defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     )
 
@@ -382,18 +468,97 @@ def _reconstruct_layout(data: dict) -> str:
         para = data["par_num"][i]
         line = data["line_num"][i]
         left = data["left"][i]
-        blocks[block][para][line].append((left, word))
+        blocks_raw[block][para][line].append((left, word))
 
-    text_parts: list[str] = []
+    if not blocks_raw:
+        return ""
 
-    # Ordenar blocos por posição Y (pegar o y médio)
+    # ── 2. Detectar colunas (Opção B) ──
+    if auto_columns and len(blocks_raw) > 1:
+        # Coletar centro X de cada bloco
+        block_centers: list[tuple[int, float]] = []
+        for blk in blocks_raw:
+            xs = [
+                data["left"][i] + data["width"][i] / 2
+                for i in range(n)
+                if data["block_num"][i] == blk and (data["text"][i] or "").strip()
+            ]
+            if xs:
+                block_centers.append((blk, sum(xs) / len(xs)))
+
+        if len(block_centers) > 1:
+            # Agrupar blocos em colunas por proximidade no eixo X
+            # Usa largura total da página para calcular o limiar
+            widths = [
+                data["width"][i]
+                for i in range(n)
+                if data["text"][i] and data["text"][i].strip()
+            ]
+            page_width = max(
+                data["left"][i] + data["width"][i]
+                for i in range(n)
+                if data["text"][i] and data["text"][i].strip()
+            ) if widths else 1000
+
+            # Limiar: metade da largura da página
+            threshold = page_width / 2
+
+            # Classificar blocos em colunas (esquerda / direita)
+            colunas: dict[int, list[int]] = {0: [], 1: []}
+            for blk, cx in block_centers:
+                col = 0 if cx < threshold else 1
+                colunas[col].append(blk)
+
+            # Se uma das colunas ficou vazia, cai no fallback linear
+            if colunas[0] and colunas[1]:
+                text_parts: list[str] = []
+
+                for col_id in sorted(colunas.keys()):
+                    blocos_col = sorted(
+                        colunas[col_id],
+                        key=lambda b: _block_median_y(data, b),
+                    )
+
+                    for bi, blk in enumerate(blocos_col):
+                        paras = blocks_raw[blk]
+                        para_order = sorted(paras.keys())
+
+                        for pi, para in enumerate(para_order):
+                            lines = paras[para]
+                            line_order = sorted(lines.keys())
+
+                            for li, line in enumerate(line_order):
+                                words = lines[line]
+                                words.sort(key=lambda x: x[0])
+                                line_text = " ".join(w for _, w in words)
+                                text_parts.append(line_text)
+
+                            if pi < len(para_order) - 1:
+                                text_parts.append("")
+
+                        # Espaço entre blocos da mesma coluna
+                        if bi < len(blocos_col) - 1:
+                            text_parts.append("")
+                            text_parts.append("")
+
+                    # Espaço entre colunas
+                    text_parts.append("")
+                    text_parts.append("")
+
+                result = "\n".join(text_parts).strip()
+                # Se o resultado for muito maior que o esperado, cai no fallback
+                if len(result) > 100:
+                    return result
+
+    # ── 3. Fallback: ordenação linear por Y (comportamento original) ──
+    text_parts = []
     block_order = sorted(
-        blocks.keys(),
+        blocks_raw.keys(),
         key=lambda b: _block_median_y(data, b),
     )
 
     for block in block_order:
-        paras = blocks[block]
+        paras = blocks_raw[block]
         para_order = sorted(paras.keys())
 
         for pi, para in enumerate(para_order):
@@ -402,15 +567,13 @@ def _reconstruct_layout(data: dict) -> str:
 
             for li, line in enumerate(line_order):
                 words = lines[line]
-                words.sort(key=lambda x: x[0])  # ordenar por X
+                words.sort(key=lambda x: x[0])
                 line_text = " ".join(w for _, w in words)
                 text_parts.append(line_text)
 
-            # Espaço entre parágrafos dentro do mesmo bloco
             if pi < len(para_order) - 1:
                 text_parts.append("")
 
-        # Espaço entre blocos (como um separador de página)
         text_parts.append("")
         text_parts.append("")
 
@@ -434,23 +597,64 @@ def _block_median_y(data: dict, block_num: int) -> float:
 # ---------------------------------------------------------------------------
 # 6. Pós-processamento do texto
 # ---------------------------------------------------------------------------
-def clean_text(text: str) -> str:
-    """Limpeza básica do texto OCR."""
-    # Remover linhas que são só espaços/tabs
+def clean_text(text: str, min_alpha_ratio: float = 0.3) -> str:
+    """Limpeza do texto OCR: remove ruído e linhas de lixo.
+
+    Estratégias:
+      1. Linhas com baixa densidade de caracteres alfanuméricos são descartadas.
+      2. Espaços duplicados no início/fim são removidos.
+      3. Máximo de 2 linhas vazias consecutivas.
+
+    Args:
+        text: Texto bruto do OCR.
+        min_alpha_ratio: Proporção mínima de letras/números para
+            considerar a linha válida (default 0.3 = 30%).
+
+    Returns:
+        Texto limpo.
+    """
+    import unicodedata
+
     lines = text.split("\n")
-    cleaned = [line.rstrip() for line in lines]
-    # Remover linhas duplicadas consecutivas vazias (máx 2 seguidas)
-    result: list[str] = []
+    cleaned: list[str] = []
+
+    # Contador de linhas vazias consecutivas
     empty_count = 0
-    for line in cleaned:
-        if line == "":
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+
+        # ── Linha vazia ──
+        if not line:
             empty_count += 1
             if empty_count <= 2:
-                result.append(line)
-        else:
-            empty_count = 0
-            result.append(line)
-    return "\n".join(result).strip()
+                cleaned.append(line)
+            continue
+
+        empty_count = 0
+
+        # ── Pular linhas que são apenas separadores visuais ──
+        if re.match(r"^[\s=\-_\|\.\,\:\;]+$", line):
+            continue
+
+        # ── Pular linhas com alta densidade de caracteres especiais ──
+        # Conta caracteres alfanuméricos (letras com acento inclusas)
+        alpha_count = sum(
+            1 for c in line
+            if c.isalnum() or unicodedata.category(c) in ("Ll", "Lu", "Lt", "Lo", "Nd")
+        )
+        total_visible = sum(1 for c in line if not c.isspace())
+
+        if total_visible > 0 and (alpha_count / total_visible) < min_alpha_ratio:
+            continue
+
+        # ── Linha válida ──
+        cleaned.append(line)
+
+    # Junta e remove espaços/tabs duplicados dentro das linhas
+    result = "\n".join(cleaned)
+    result = re.sub(r"[ \t]+", " ", result)
+    return result.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -461,14 +665,24 @@ def run_pipeline(
     pages: list[int],
     dpi: int = 300,
     lang: str = "por",
-    psm: int = 6,
+    psm: int = 3,
     output_txt: Path | None = None,
     poppler_path: str | None = None,
     tessdata_dir: str | None = None,
     tesseract_cmd: str | None = None,
     keep_images: bool = True,
+    preprocess: bool = True,
+    binarize: bool = True,
+    denoise: bool = True,
+    auto_columns: bool = True,
 ) -> Path:
     """Executa o pipeline completo: PDF → imagens → OCR → TXT.
+
+    Args:
+        preprocess: Aplica pré-processamento na imagem antes do OCR.
+        binarize: Converte para preto e branco.
+        denoise: Remove ruído com filtro mediano.
+        auto_columns: Tenta detectar colunas no layout.
 
     Returns:
         Path do arquivo .txt gerado.
@@ -500,6 +714,10 @@ def run_pipeline(
                 psm=psm,
                 tessdata_dir=tessdata_dir,
                 tesseract_cmd=tesseract_cmd,
+                preprocess=preprocess,
+                binarize=binarize,
+                denoise=denoise,
+                auto_columns=auto_columns,
             )
             text = clean_text(text)
             if text:
@@ -581,15 +799,35 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--psm",
         type=int,
-        default=6,
+        default=3,
         choices=[1, 3, 4, 6],
         help=(
-            "Modo de segmentação Tesseract (default: 6):\n"
+            "Modo de segmentação Tesseract (default: 3):\n"
             "  1 = automático com OSD\n"
-            "  3 = automático sem OSD\n"
+            "  3 = automático sem OSD (recomendado)\n"
             "  4 = coluna única\n"
-            "  6 = bloco uniforme (recomendado)"
+            "  6 = bloco uniforme (uma coluna)"
         ),
+    )
+    parser.add_argument(
+        "--no-preprocess",
+        action="store_true",
+        help="Desativa pré-processamento da imagem (escala de cinza, contraste, binarização)",
+    )
+    parser.add_argument(
+        "--no-binarize",
+        action="store_true",
+        help="Desativa binarização no pré-processamento",
+    )
+    parser.add_argument(
+        "--no-denoise",
+        action="store_true",
+        help="Desativa remoção de ruído no pré-processamento",
+    )
+    parser.add_argument(
+        "--no-auto-columns",
+        action="store_true",
+        help="Desativa detecção automática de colunas no layout",
     )
     parser.add_argument(
         "--poppler-path",
@@ -754,6 +992,22 @@ def main() -> None:
         args.dpi,
     )
 
+    # Flags de pré-processamento (--no-* invertem o default True)
+    preprocess = not args.no_preprocess
+    binarize = not args.no_binarize
+    denoise = not args.no_denoise
+    auto_columns = not args.no_auto_columns
+
+    if preprocess:
+        log.info(
+            "Pré-processamento: binarizar=%s | remover ruído=%s",
+            binarize,
+            denoise,
+        )
+    else:
+        log.info("Pré-processamento desligado.")
+    log.info("Detecção de colunas: %s", "ligada" if auto_columns else "desligada")
+
     try:
         output = run_pipeline(
             pdf_path=pdf_path,
@@ -766,6 +1020,10 @@ def main() -> None:
             tessdata_dir=args.tessdata_dir,
             tesseract_cmd=args.tesseract_cmd,
             keep_images=args.keep_images,
+            preprocess=preprocess,
+            binarize=binarize,
+            denoise=denoise,
+            auto_columns=auto_columns,
         )
         print(f"\n[OK] OCR concluido! Arquivo: {output}")
     except Exception as exc:
