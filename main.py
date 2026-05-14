@@ -4,12 +4,11 @@ PDF → OCR → TXT
 Fluxo completo:
   1. Busca PDFs na pasta ./pdf/ (fallback: ./data/)
   2. Usuário seleciona o PDF e informa as páginas desejadas
-  3. Converte páginas para imagens PNG via pdf2image
+  3. Converte páginas para imagens PNG via PyMuPDF
   4. Aplica OCR com pytesseract preservando layout
   5. Gera arquivo .txt com o resultado
 
-Dependências do sistema (instalar antes):
-  - Poppler (para pdf2image): https://github.com/oschwartz10612/poppler-windows
+Dependência do sistema:
   - Tesseract OCR (para pytesseract): https://github.com/UB-Mannheim/tesseract/wiki
     → Durante instalação, adicione ao PATH ou anote o caminho.
 """
@@ -47,20 +46,15 @@ DATA_DIR.mkdir(exist_ok=True)
 # ---------------------------------------------------------------------------
 DEPENDENCY_HELP = """
 ================================================================================
-  DEPENDENCIAS EXTERNAS NECESSARIAS
+  DEPENDENCIA EXTERNA NECESSARIA
 
-  1. Poppler (para pdf2image converter PDF -> imagem)
-     -> Download: https://github.com/oschwartz10612/poppler-windows
-     -> Extraia e adicione a pasta Library/bin ao PATH
-     -> Ou configure poppler_path no script
-
-  2. Tesseract OCR (para pytesseract)
-     -> Download: https://github.com/UB-Mannheim/tesseract/wiki
-     -> Instale COM suporte a portugues (por default)
-     -> Adicione ao PATH ou configure tesseract_cmd no script
+  Tesseract OCR (para pytesseract)
+    -> Download: https://github.com/UB-Mannheim/tesseract/wiki
+    -> Instale COM suporte a portugues (por default)
+    -> Adicione ao PATH ou configure tesseract_cmd no script
 
   Para instalar pacotes Python:
-     pip install pdf2image pytesseract Pillow
+     uv sync
 ================================================================================
 """
 
@@ -124,28 +118,10 @@ def preprocess_image(
     return img
 
 
-def check_dependencies() -> tuple[bool, bool]:
-    """Verifica se pdftoppm (poppler) e tesseract estão acessíveis.
-
-    Returns:
-        (poppler_ok, tesseract_ok)
-    """
+def check_tesseract() -> bool:
+    """Verifica se o tesseract está acessível no PATH."""
     import shutil
-
-    poppler_ok = shutil.which("pdftoppm") is not None
-    tesseract_ok = shutil.which("tesseract") is not None
-
-    return poppler_ok, tesseract_ok
-
-
-def ensure_poppler_path(poppler_path: str | None = None) -> str | None:
-    """Retorna o caminho do Poppler se configurado, ou None para PATH."""
-    if poppler_path:
-        resolved = Path(poppler_path).resolve()
-        if resolved.is_dir():
-            return str(resolved)
-        log.warning("Caminho poppler_path inválido: %s", poppler_path)
-    return None
+    return shutil.which("tesseract") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -309,29 +285,26 @@ def convert_pages_to_images(
     pages: list[int],
     output_dir: Path,
     dpi: int = 300,
-    poppler_path: str | None = None,
     use_cache: bool = True,
 ) -> list[Path]:
-    """Converte páginas selecionadas do PDF para PNG.
+    """Converte páginas selecionadas do PDF para PNG usando PyMuPDF.
 
     Se ``use_cache`` for True (padrão), verifica se o PNG da página
     já existe em ``output_dir`` e reaproveita, evitando conversões
     repetidas do mesmo PDF.
-
-    Converte página por página (first_page/last_page) para eficiência.
 
     Args:
         pdf_path: Caminho do PDF.
         pages: Lista 1-indexed de páginas.
         output_dir: Diretório onde salvar as imagens.
         dpi: Resolução da conversão (default 300).
-        poppler_path: Caminho da pasta bin do Poppler (ou None para PATH).
         use_cache: Se True, reaproveita PNGs já existentes.
 
     Returns:
         Lista de paths das imagens geradas.
     """
-    from pdf2image import convert_from_path
+    import io
+    from PIL import Image
 
     image_paths: list[Path] = []
     pages_to_convert: list[int] = []
@@ -357,28 +330,30 @@ def convert_pages_to_images(
         return image_paths
 
     log.info(
-        "Convertendo %d pagina(s) para imagens (%d DPI)...",
+        "Convertendo %d pagina(s) para imagens (%d DPI) via PyMuPDF...",
         len(pages_to_convert),
         dpi,
     )
 
-    for page in pages_to_convert:
-        page_images = convert_from_path(
-            pdf_path=str(pdf_path),
-            dpi=dpi,
-            first_page=page,
-            last_page=page,
-            fmt="png",
-            poppler_path=poppler_path,
-        )
-        if not page_images:
-            log.warning("Pagina %d: conversao gerou imagem vazia.", page)
-            continue
+    import pymupdf
+    doc = pymupdf.open(str(pdf_path))
 
-        out_path = output_dir / f"pagina_{page:04d}.png"
-        page_images[0].save(str(out_path), "PNG")
-        image_paths.append(out_path)
-        log.info("  Pagina %d salva: %s", page, out_path.name)
+    try:
+        for page in pages_to_convert:
+            page_idx = page - 1  # PyMuPDF é 0-indexed
+            if page_idx < 0 or page_idx >= doc.page_count:
+                log.warning("Pagina %d: indice fora do range.", page)
+                continue
+
+            pix = doc[page_idx].get_pixmap(dpi=dpi)
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+
+            out_path = output_dir / f"pagina_{page:04d}.png"
+            img.save(str(out_path), "PNG")
+            image_paths.append(out_path)
+            log.info("  Pagina %d salva: %s", page, out_path.name)
+    finally:
+        doc.close()
 
     log.info("Conversao concluida: %d imagem(ns) em '%s/'", len(image_paths), output_dir.name)
     return image_paths
@@ -696,7 +671,6 @@ def run_pipeline(
     lang: str = "por",
     psm: int = 3,
     output_txt: Path | None = None,
-    poppler_path: str | None = None,
     tessdata_dir: str | None = None,
     tesseract_cmd: str | None = None,
     keep_images: bool = True,
@@ -718,13 +692,12 @@ def run_pipeline(
     Returns:
         Path do arquivo .txt gerado.
     """
-    # 4. Converter páginas para imagens
+    # 4. Converter páginas para imagens via PyMuPDF
     images = convert_pages_to_images(
         pdf_path=pdf_path,
         pages=pages,
         output_dir=DATA_DIR,
         dpi=dpi,
-        poppler_path=poppler_path,
         use_cache=use_cache,
     )
 
@@ -862,10 +835,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Desativa detecção automática de colunas no layout",
     )
     parser.add_argument(
-        "--poppler-path",
-        help="Caminho da pasta bin do Poppler (ex: C:/poppler/Library/bin)",
-    )
-    parser.add_argument(
         "--tesseract-cmd",
         help="Caminho do executável tesseract (ex: C:/Tesseract-OCR/tesseract.exe)",
     )
@@ -898,28 +867,8 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    # ── Auto-detecção de dependências comuns ──
-    # Prioridade: 1) CLI args  2) variáveis de ambiente  3) caminhos fixos
-    if not args.poppler_path:
-        env_poppler = os.environ.get("POPPLER_PATH")
-        if env_poppler:
-            p = Path(env_poppler)
-            if p.is_dir() and (p / "pdftoppm.exe").is_file():
-                args.poppler_path = str(p.resolve())
-                log.info("Poppler via POPPLER_PATH: %s", args.poppler_path)
-
-    if not args.poppler_path:
-        candidates_poppler = [
-            PROJECT_ROOT / ".deps" / "poppler" / "Library" / "bin",
-            Path("C:/poppler/Library/bin"),
-            Path("C:/Program Files/poppler/Library/bin"),
-        ]
-        for p in candidates_poppler:
-            if p.is_dir() and (p / "pdftoppm.exe").is_file():
-                args.poppler_path = str(p.resolve())
-                log.info("Poppler auto-detectado em: %s", args.poppler_path)
-                break
-
+    # ── Auto-detecção do Tesseract ──
+    # Prioridade: 1) CLI args  2) variável de ambiente  3) caminhos fixos
     if not args.tesseract_cmd:
         env_tesseract = os.environ.get("TESSERACT_CMD")
         if env_tesseract:
@@ -942,26 +891,17 @@ def main() -> None:
 
     # ── Apenas check de dependências ──
     if args.check_deps:
-        poppler_ok, tesseract_ok = check_dependencies()
+        tesseract_ok = check_tesseract()
         print("\n[CHECK] Verificacao de dependencias:\n")
-        print(f"  Poppler (pdftoppm):  {'[OK]' if poppler_ok else '[FALTA] NAO ENCONTRADO'}")
         print(f"  Tesseract:           {'[OK]' if tesseract_ok else '[FALTA] NAO ENCONTRADO'}")
-        if args.poppler_path:
-            print(f"  Poppler (--poppler-path): {args.poppler_path}")
         if args.tesseract_cmd:
             print(f"  Tesseract (--tesseract-cmd): {args.tesseract_cmd}")
-        if not poppler_ok and not args.poppler_path:
-            print(DEPENDENCY_HELP)
         if not tesseract_ok and not args.tesseract_cmd:
             print(DEPENDENCY_HELP)
-        sys.exit(0 if (poppler_ok or args.poppler_path) and (tesseract_ok or args.tesseract_cmd) else 1)
+        sys.exit(0 if (tesseract_ok or args.tesseract_cmd) else 1)
 
-    # ── Verificar dependências ──
-    poppler_ok, tesseract_ok = check_dependencies()
-    if not poppler_ok and not args.poppler_path:
-        log.error("Poppler não encontrado no PATH nem em locais comuns.")
-        print(DEPENDENCY_HELP)
-        sys.exit(1)
+    # ── Verificar dependência ──
+    tesseract_ok = check_tesseract()
     if not tesseract_ok and not args.tesseract_cmd:
         log.error("Tesseract não encontrado no PATH nem em locais comuns.")
         print(DEPENDENCY_HELP)
@@ -992,19 +932,15 @@ def main() -> None:
         else:
             pdf_path = select_pdf(pdfs)
 
-    # ── 2. Obter número de páginas ──
+    # ── 2. Obter número de páginas via PyMuPDF ──
     try:
-        from pdf2image import pdfinfo_from_path
-
-        info = pdfinfo_from_path(
-            str(pdf_path),
-            poppler_path=ensure_poppler_path(args.poppler_path),
-        )
-        total_pages = info["Pages"]
+        import pymupdf
+        doc = pymupdf.open(str(pdf_path))
+        total_pages = doc.page_count
+        doc.close()
     except Exception as exc:
         log.warning("Não foi possível detectar número de páginas: %s", exc)
-        # Fallback: contar convertendo 1 página
-        total_pages = 0  # sera ignorado
+        total_pages = 0
 
     # ── 3. Selecionar páginas ──
     if args.pages:
@@ -1065,7 +1001,6 @@ def main() -> None:
             lang=args.lang,
             psm=args.psm,
             output_txt=args.output,
-            poppler_path=ensure_poppler_path(args.poppler_path),
             tessdata_dir=args.tessdata_dir,
             tesseract_cmd=args.tesseract_cmd,
             keep_images=args.keep_images,
