@@ -1073,7 +1073,7 @@ def run_pipeline(
     denoise: bool = True,
     auto_columns: bool = True,
     multi_pass: bool = True,
-    table_detect: bool = True,
+    table_detect: bool = False,
     use_cache: bool = True,
 ) -> Path:
     """Executa o pipeline completo: PDF → imagens → OCR → TXT.
@@ -1293,9 +1293,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Desativa multi-pass OCR (rodar apenas 1 passada de OCR)",
     )
     parser.add_argument(
-        "--no-table-detect",
+        "--table-detect",
         action="store_true",
-        help="Desativa detecção e formatação de tabelas",
+        help="Ativa detecção e formatação automática de tabelas",
     )
     parser.add_argument(
         "--tesseract-cmd",
@@ -1446,7 +1446,7 @@ def main() -> None:
     denoise = not args.no_denoise
     auto_columns = not args.no_auto_columns
     multi_pass = not args.no_multi_pass
-    table_detect = not args.no_table_detect
+    table_detect = args.table_detect
 
     if preprocess:
         log.info(
