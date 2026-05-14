@@ -309,8 +309,13 @@ def convert_pages_to_images(
     output_dir: Path,
     dpi: int = 300,
     poppler_path: str | None = None,
+    use_cache: bool = True,
 ) -> list[Path]:
     """Converte páginas selecionadas do PDF para PNG.
+
+    Se ``use_cache`` for True (padrão), verifica se o PNG da página
+    já existe em ``output_dir`` e reaproveita, evitando conversões
+    repetidas do mesmo PDF.
 
     Converte página por página (first_page/last_page) para eficiência.
 
@@ -320,6 +325,7 @@ def convert_pages_to_images(
         output_dir: Diretório onde salvar as imagens.
         dpi: Resolução da conversão (default 300).
         poppler_path: Caminho da pasta bin do Poppler (ou None para PATH).
+        use_cache: Se True, reaproveita PNGs já existentes.
 
     Returns:
         Lista de paths das imagens geradas.
@@ -327,13 +333,35 @@ def convert_pages_to_images(
     from pdf2image import convert_from_path
 
     image_paths: list[Path] = []
+    pages_to_convert: list[int] = []
+
+    # ── Verificar cache ──
+    if use_cache and output_dir.is_dir():
+        for page in pages:
+            cached = output_dir / f"pagina_{page:04d}.png"
+            if cached.is_file():
+                image_paths.append(cached)
+                log.info("  Pagina %d: usando cache (%s)", page, cached.name)
+            else:
+                pages_to_convert.append(page)
+    else:
+        pages_to_convert = list(pages)
+
+    if not pages_to_convert:
+        log.info(
+            "Todas as %d pagina(s) ja estao em cache em '%s/'.",
+            len(pages),
+            output_dir.name,
+        )
+        return image_paths
+
     log.info(
         "Convertendo %d pagina(s) para imagens (%d DPI)...",
-        len(pages),
+        len(pages_to_convert),
         dpi,
     )
 
-    for page in pages:
+    for page in pages_to_convert:
         page_images = convert_from_path(
             pdf_path=str(pdf_path),
             dpi=dpi,
@@ -675,6 +703,7 @@ def run_pipeline(
     binarize: bool = True,
     denoise: bool = True,
     auto_columns: bool = True,
+    use_cache: bool = True,
 ) -> Path:
     """Executa o pipeline completo: PDF → imagens → OCR → TXT.
 
@@ -683,6 +712,7 @@ def run_pipeline(
         binarize: Converte para preto e branco.
         denoise: Remove ruído com filtro mediano.
         auto_columns: Tenta detectar colunas no layout.
+        use_cache: Reaproveita PNGs já existentes na pasta data/.
 
     Returns:
         Path do arquivo .txt gerado.
@@ -694,6 +724,7 @@ def run_pipeline(
         output_dir=DATA_DIR,
         dpi=dpi,
         poppler_path=poppler_path,
+        use_cache=use_cache,
     )
 
     if not images:
@@ -1024,6 +1055,7 @@ def main() -> None:
             binarize=binarize,
             denoise=denoise,
             auto_columns=auto_columns,
+            use_cache=True,
         )
         print(f"\n[OK] OCR concluido! Arquivo: {output}")
     except Exception as exc:
