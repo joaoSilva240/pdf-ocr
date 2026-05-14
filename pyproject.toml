@@ -8,6 +8,9 @@ dependencies = [
     "pytesseract>=0.3",
     "Pillow>=10.0",
     "pymupdf>=1.27.2.3",
+    "img2table>=2.0.0",
+    "opencv-python>=4.13.0.92",
+    "pandas>=3.0.3",
 ]
 
 [project.scripts]
