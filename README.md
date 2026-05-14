@@ -1,5 +1,16 @@
 # PDF-OCR
 
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.13+-3776AB?style=for-the-badge&logo=python&logoColor=white" />
+  <img src="https://img.shields.io/badge/Tesseract%20OCR-5.5-008080?style=for-the-badge&logo=tesseract&logoColor=white" />
+  <img src="https://img.shields.io/badge/PyMuPDF-1.27-0B0B0B?style=for-the-badge&logo=readthedocs&logoColor=white" />
+  <img src="https://img.shields.io/badge/uv-0.9-5391FE?style=for-the-badge&logo=uv&logoColor=white" />
+  <br>
+  <img src="https://img.shields.io/badge/OCR-pytesseract-00B4AB?style=flat-square" />
+  <img src="https://img.shields.io/badge/Layout-OpenCV%20%7C%20Pandas-5C3EE8?style=flat-square" />
+  <img src="https://img.shields.io/badge/PDF-PyMuPDF-800000?style=flat-square" />
+</p>
+
 Converte PDFs em texto usando OCR com **preservação de layout**, **detecção de colunas**, **multi-pass para títulos decorativos** e **formatação de tabelas**.
 
 ## Fluxo
