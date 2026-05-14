@@ -599,6 +599,147 @@ def _block_median_y(data: dict, block_num: int) -> float:
 
 
 # ---------------------------------------------------------------------------
+# 5B. Multi-pass OCR (títulos decorativos + corpo do texto)
+# ---------------------------------------------------------------------------
+def ocr_image_multi_pass(
+    image_path: Path,
+    lang: str = "por",
+    psm: int = 3,
+    tessdata_dir: str | None = None,
+    tesseract_cmd: str | None = None,
+    preprocess: bool = True,
+    binarize: bool = True,
+    denoise: bool = True,
+    auto_columns: bool = True,
+) -> str:
+    """Executa OCR em duas passadas e mescla os resultados.
+
+    Estratégia:
+      1. **Passada 1 — corpo (com pré-processamento):**
+         Imagem binarizada/limpa → captura o corpo do texto com
+         máximo de acurácia. Títulos decorativos podem ser perdidos.
+
+      2. **Passada 2 — títulos (sem pré-processamento):**
+         Imagem original → preserva fontes decorativas e títulos
+         que a binarização destruiria.
+
+      3. **Mesclagem:**
+         - Linhas curtas (≤ 40 caracteres) que SÓ existem na
+           passada 2 são tratadas como **títulos** e inseridas.
+         - Linhas que existem em ambas são deduplicadas.
+         - A ordem original da passada 2 é preservada.
+
+    Args:
+        Mesmos parâmetros de ``ocr_image_with_layout``.
+
+    Returns:
+        Texto mesclado com títulos + corpo limpo.
+    """
+    # ── Passada 1: com pré-processamento (corpo limpo, sem títulos) ──
+    text_clean = ocr_image_with_layout(
+        image_path=image_path,
+        lang=lang,
+        psm=psm,
+        tessdata_dir=tessdata_dir,
+        tesseract_cmd=tesseract_cmd,
+        preprocess=True,
+        binarize=binarize,
+        denoise=denoise,
+        auto_columns=auto_columns,
+    )
+
+    # ── Passada 2: sem pré-processamento (títulos preservados) ──
+    text_full = ocr_image_with_layout(
+        image_path=image_path,
+        lang=lang,
+        psm=psm,
+        tessdata_dir=tessdata_dir,
+        tesseract_cmd=tesseract_cmd,
+        preprocess=False,
+        binarize=False,
+        denoise=False,
+        auto_columns=auto_columns,
+    )
+
+    # ── Mesclagem inteligente ──
+    return _merge_ocr_passes(text_clean, text_full)
+
+
+def _merge_ocr_passes(text_clean: str, text_full: str) -> str:
+    """Mescla texto limpo (pass 1) com texto completo (pass 2).
+
+    Estratégia:
+      - Linhas que existem em ambos os textos → usa versão do
+        texto limpo (pass 1), que tem menos ruído.
+      - Linhas curtas (≤ 40 chars) que SÓ existem na pass 2
+        → consideradas títulos decorativos → mantidas.
+      - Linhas muito curtas (< 4 chars) ou com alta densidade
+        de caracteres especiais são descartadas (ruído).
+    """
+    import unicodedata
+
+    lines_clean = [l.rstrip() for l in text_clean.split("\n")]
+    lines_full = [l.rstrip() for l in text_full.split("\n")]
+
+    # Conjuntos para consulta rápida
+    set_clean_lines = {l for l in lines_clean if l.strip()}
+    set_clean_stripped = {l.strip() for l in lines_clean if l.strip()}
+
+    # Linhas curtas na pass 2 (candidatas a título)
+    short_full = {
+        l.strip() for l in lines_full
+        if l.strip() and len(l.strip()) <= 40
+    }
+
+    def _is_noise(line: str) -> bool:
+        """Retorna True se a linha parece ruído (não texto válido)."""
+        s = line.strip()
+        if len(s) < 4:
+            return True
+        # Conta caracteres alfanuméricos
+        alpha = sum(1 for c in s if c.isalnum() or c in "áéíóúâêîôûãõàçÀÁÉÍÓÚÂÊÎÔÛÃÕÇüÜñÑ")
+        return (alpha / len(s)) < 0.4 if len(s) > 0 else True
+
+    result: list[str] = []
+    seen: set[str] = set()
+
+    for line in lines_full:
+        key = line.strip()
+        if not key:
+            result.append(line)
+            continue
+
+        # Pular ruído óbvio
+        if _is_noise(key):
+            continue
+
+        # Título decorativo: curto, só existe na pass 2
+        is_title = (
+            len(key) <= 40
+            and key not in set_clean_stripped
+            and key in short_full
+        )
+
+        if key in set_clean_stripped and not is_title:
+            # Linha existe nos dois textos → usa versão do texto limpo
+            if key not in seen:
+                # Encontra a versão correspondente em text_clean
+                for cl in lines_clean:
+                    if cl.strip() == key and cl.strip() not in seen:
+                        result.append(cl)
+                        seen.add(cl.strip())
+                        break
+            continue
+
+        # Linha nova (título ou texto que pass 1 não capturou)
+        if key not in seen:
+            result.append(line)
+            seen.add(key)
+
+    return "\n".join(result)
+
+
+# ---------------------------------------------------------------------------
 # 6. Pós-processamento do texto
 # ---------------------------------------------------------------------------
 def clean_text(text: str, min_alpha_ratio: float = 0.3) -> str:
@@ -678,6 +819,7 @@ def run_pipeline(
     binarize: bool = True,
     denoise: bool = True,
     auto_columns: bool = True,
+    multi_pass: bool = True,
     use_cache: bool = True,
 ) -> Path:
     """Executa o pipeline completo: PDF → imagens → OCR → TXT.
@@ -687,6 +829,8 @@ def run_pipeline(
         binarize: Converte para preto e branco.
         denoise: Remove ruído com filtro mediano.
         auto_columns: Tenta detectar colunas no layout.
+        multi_pass: Se True, roda OCR em 2 passadas (c/ e s/ preprocess)
+                    e mescla para capturar títulos decorativos.
         use_cache: Reaproveita PNGs já existentes na pasta data/.
 
     Returns:
@@ -713,17 +857,30 @@ def run_pipeline(
         page_num = pages[i - 1]
         print(f"\n--- Pagina {page_num} ---")
         try:
-            text = ocr_image_with_layout(
-                image_path=img_path,
-                lang=lang,
-                psm=psm,
-                tessdata_dir=tessdata_dir,
-                tesseract_cmd=tesseract_cmd,
-                preprocess=preprocess,
-                binarize=binarize,
-                denoise=denoise,
-                auto_columns=auto_columns,
-            )
+            if multi_pass:
+                text = ocr_image_multi_pass(
+                    image_path=img_path,
+                    lang=lang,
+                    psm=psm,
+                    tessdata_dir=tessdata_dir,
+                    tesseract_cmd=tesseract_cmd,
+                    preprocess=preprocess,
+                    binarize=binarize,
+                    denoise=denoise,
+                    auto_columns=auto_columns,
+                )
+            else:
+                text = ocr_image_with_layout(
+                    image_path=img_path,
+                    lang=lang,
+                    psm=psm,
+                    tessdata_dir=tessdata_dir,
+                    tesseract_cmd=tesseract_cmd,
+                    preprocess=preprocess,
+                    binarize=binarize,
+                    denoise=denoise,
+                    auto_columns=auto_columns,
+                )
             text = clean_text(text)
             if text:
                 # Mostrar preview
@@ -833,6 +990,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-auto-columns",
         action="store_true",
         help="Desativa detecção automática de colunas no layout",
+    )
+    parser.add_argument(
+        "--no-multi-pass",
+        action="store_true",
+        help="Desativa multi-pass OCR (rodar apenas 1 passada de OCR)",
     )
     parser.add_argument(
         "--tesseract-cmd",
@@ -977,11 +1139,12 @@ def main() -> None:
         args.dpi,
     )
 
-    # Flags de pré-processamento (--no-* invertem o default True)
+    # Flags (--no-* invertem o default True)
     preprocess = not args.no_preprocess
     binarize = not args.no_binarize
     denoise = not args.no_denoise
     auto_columns = not args.no_auto_columns
+    multi_pass = not args.no_multi_pass
 
     if preprocess:
         log.info(
@@ -992,6 +1155,7 @@ def main() -> None:
     else:
         log.info("Pré-processamento desligado.")
     log.info("Detecção de colunas: %s", "ligada" if auto_columns else "desligada")
+    log.info("Multi-pass OCR: %s", "ligado" if multi_pass else "desligado")
 
     try:
         output = run_pipeline(
@@ -1008,6 +1172,7 @@ def main() -> None:
             binarize=binarize,
             denoise=denoise,
             auto_columns=auto_columns,
+            multi_pass=multi_pass,
             use_cache=True,
         )
         print(f"\n[OK] OCR concluido! Arquivo: {output}")
