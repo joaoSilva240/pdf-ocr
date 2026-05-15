@@ -1,0 +1,42 @@
+# ── Python ──────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+
+# ── Ambiente virtual ───────────────────────────────────────────────────────────
+.venv/
+
+# ── Dependências baixadas manualmente ──────────────────────────────────────────
+.deps/
+*.exe
+*.zip
+
+# ── Dados gerados (imagens PNG, resultados TXT) ───────────────────────────────
+data/
+ocr_*.txt
+
+# ── PDFs (arquivos grandes) ────────────────────────────────────────────────────
+*.pdf
+
+# ── Config local / IDE ─────────────────────────────────────────────────────────
+.python-version
+.vscode/
+.idea/
+*.iml
+Thumbs.db
+Desktop.ini
+
+# ── Ambiente ────────────────────────────────────────────────────────────────────
+.env
+.env.local
+
+# ── Git ─────────────────────────────────────────────────────────────────────────
+.git/
+.gitignore
+
+# ── Docker (não precisa copiar imagem docker para dentro do contexto) ──────────
+*.tar
+*.gz

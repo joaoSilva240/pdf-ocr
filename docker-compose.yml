@@ -1,0 +1,41 @@
+# ==============================================================================
+#  PDF → OCR → TXT — Docker Compose
+#
+#  O Tesseract OCR (com suporte a português) está instalado dentro do próprio
+#  container da aplicação (via Dockerfile). O pytesseract chama o binário
+#  tesseract diretamente por linha de comando, então ambos precisam estar no
+#  mesmo ambiente — não faz sentido ter um container separado para o Tesseract.
+#
+#  Uso:
+#    docker compose run --rm app                    # modo interativo
+#    docker compose run --rm app --pdf doc.pdf --pages 1-10  # não-interativo
+#    docker compose run --rm app --check-deps       # verificar dependências
+# ==============================================================================
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pdf-ocr:latest
+    container_name: pdf-ocr
+
+    # ── Modo interactivo (necessário para input do usuário) ──
+    stdin_open: true
+    tty: true
+
+    # ── Volumes ───────────────────────────────────────────────────────────────
+    # Coloque seus PDFs em ./pdf/ e os resultados sairão em ./data/
+    volumes:
+      - ./pdf:/app/pdf:ro        # PDFs de entrada (read-only)
+      - ./data:/app/data         # Imagens PNG + TXT de saída
+
+    # ── Ambiente ──────────────────────────────────────────────────────────────
+    # Descomente se precisar de um caminho tessdata personalizado:
+    # environment:
+    #   - TESSDATA_DIR=/usr/share/tesseract-ocr/5/tessdata
+
+    # ── Comportamento padrão: exibe help ──────────────────────────────────────
+    # docker compose run --rm app           → entra no modo interativo
+    # docker compose run --rm app --help    → mostra ajuda
+    command: []
