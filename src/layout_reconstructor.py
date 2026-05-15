@@ -117,7 +117,7 @@ def reconstruct_layout(data: dict, auto_columns: bool = True) -> str:
                             lines = paras[para]
                             line_order = sorted(lines.keys())
 
-                            for li, line in enumerate(line_order):
+                            for _li, line in enumerate(line_order):
                                 words = lines[line]
                                 words.sort(key=lambda x: x[0])
                                 line_text = " ".join(w for _, w in words)
@@ -155,7 +155,7 @@ def reconstruct_layout(data: dict, auto_columns: bool = True) -> str:
             lines = paras[para]
             line_order = sorted(lines.keys())
 
-            for li, line in enumerate(line_order):
+            for _li, line in enumerate(line_order):
                 words = lines[line]
                 words.sort(key=lambda x: x[0])
                 line_text = " ".join(w for _, w in words)

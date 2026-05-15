@@ -61,9 +61,8 @@ def ocr_image_with_layout(
         Texto extraído com layout preservado.
     """
     import pytesseract
-    from pytesseract import Output
-
     from PIL import Image
+    from pytesseract import Output
 
     # Configurar caminho do executável, se fornecido
     if tesseract_cmd:
@@ -182,18 +181,16 @@ def _merge_ocr_passes(text_clean: str, text_full: str) -> str:
       - Linhas muito curtas (< 4 chars) ou com alta densidade
         de caracteres especiais são descartadas (ruído).
     """
-    import unicodedata
 
-    lines_clean = [l.rstrip() for l in text_clean.split("\n")]
-    lines_full = [l.rstrip() for l in text_full.split("\n")]
+    lines_clean = [ln.rstrip() for ln in text_clean.split("\n")]
+    lines_full = [ln.rstrip() for ln in text_full.split("\n")]
 
     # Conjuntos para consulta rápida
-    set_clean_lines = {l for l in lines_clean if l.strip()}
-    set_clean_stripped = {l.strip() for l in lines_clean if l.strip()}
+    set_clean_stripped = {ln.strip() for ln in lines_clean if ln.strip()}
 
     # Linhas curtas na pass 2 (candidatas a título)
     short_full = {
-        l.strip() for l in lines_full if l.strip() and len(l.strip()) <= 40
+        ln.strip() for ln in lines_full if ln.strip() and len(ln.strip()) <= 40
     }
 
     def _is_noise(line: str) -> bool:

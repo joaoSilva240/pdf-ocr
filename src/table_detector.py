@@ -58,9 +58,8 @@ def detect_and_format_tables(
         "y_end" e "title".
     """
     import pytesseract
-    from pytesseract import Output
-
     from PIL import Image
+    from pytesseract import Output
 
     if tesseract_cmd:
         pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
@@ -225,7 +224,7 @@ def detect_and_format_tables(
     return tables_found
 
 
-def table_to_markdown(table_df: "pd.DataFrame") -> str:
+def table_to_markdown(table_df: pd.DataFrame) -> str:
     """Converte um DataFrame de tabela para formato Markdown pipes."""
     rows = table_df.values.tolist()
     headers = list(table_df.columns)
@@ -273,8 +272,7 @@ def mask_table_regions(image_path: Path, tables: list[dict]) -> Path:
             fill="white",
         )
 
-    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-    masked_path = Path(tmp.name)
-    img.save(str(masked_path), "PNG")
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        masked_path = Path(tmp.name)
+        img.save(str(masked_path), "PNG")
     return masked_path

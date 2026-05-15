@@ -7,21 +7,18 @@ Funções públicas:
 
 from __future__ import annotations
 
-import logging
 import sys
 from datetime import datetime
 from pathlib import Path
 
 from src.config import DATA_DIR, log
+from src.ocr_engine import clean_text, ocr_image_multi_pass, ocr_image_with_layout
 from src.pdf_utils import convert_pages_to_images
-from src.ocr_engine import ocr_image_with_layout, ocr_image_multi_pass, clean_text
 from src.table_detector import (
     detect_and_format_tables,
     mask_table_regions,
     table_to_markdown,
 )
-
-log = logging.getLogger("pdf-ocr")
 
 
 # ---------------------------------------------------------------------------

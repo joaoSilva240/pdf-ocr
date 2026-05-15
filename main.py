@@ -21,21 +21,18 @@ Uso:
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from pathlib import Path
 
 from src.config import (
-    DATA_DIR,
-    PDF_DIR,
     DEPENDENCY_HELP,
-    PROJECT_ROOT,
-    check_tesseract,
+    PDF_DIR,
     auto_detect_tesseract,
+    check_tesseract,
     ensure_utf8_stdout,
     log,
 )
-from src.pdf_utils import find_pdf_files, select_pdf, parse_pages, ask_pages
+from src.pdf_utils import ask_pages, find_pdf_files, parse_pages, select_pdf
 from src.pipeline import run_pipeline
 
 
@@ -191,7 +188,7 @@ def main() -> None:
             )
             PDF_DIR.mkdir(exist_ok=True)
             print(f"\n  A pasta '{PDF_DIR.name}/' foi criada.")
-            print(f"     Coloque seus PDFs lá e execute novamente.")
+            print("     Coloque seus PDFs lá e execute novamente.")
             sys.exit(1)
 
         if len(pdfs) == 1:

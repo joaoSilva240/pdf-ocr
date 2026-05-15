@@ -166,7 +166,7 @@ def ask_pages(total_pages: int) -> list[int]:
 
     while True:
         try:
-            raw = input(f"\n>>> Quais paginas converter? ").strip().lower()
+            raw = input("\n>>> Quais paginas converter? ").strip().lower()
             if not raw:
                 print("  [!] Digite algo.")
                 continue

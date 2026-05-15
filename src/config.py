@@ -98,7 +98,7 @@ def auto_detect_tesseract(tesseract_cmd: str | None = None) -> str | None:
 
 def ensure_utf8_stdout() -> None:
     """Força UTF-8 na saída do terminal (Windows cp1252 não suporta Unicode)."""
-    try:
+    import contextlib
+
+    with contextlib.suppress(Exception):
         sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
-    except Exception:
-        pass
